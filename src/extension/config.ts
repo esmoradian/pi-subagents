@@ -108,15 +108,15 @@ function validateModelExclusionsConfig(value: unknown): void {
 	}
 }
 
-function validateOrcaProgressTabsConfig(value: unknown): void {
+function validateProgressTabsConfig(name: "orcaProgressTabs" | "herdrProgressTabs", value: unknown): void {
 	if (value === undefined) return;
-	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("config.orcaProgressTabs must be a JSON object");
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`config.${name} must be a JSON object`);
 	const config = value as Record<string, unknown>;
 	for (const key of Object.keys(config)) {
-		if (key !== "enabled") throw new Error(`config.orcaProgressTabs.${key} is not supported`);
+		if (key !== "enabled") throw new Error(`config.${name}.${key} is not supported`);
 	}
 	if (config.enabled !== undefined && typeof config.enabled !== "boolean") {
-		throw new Error("config.orcaProgressTabs.enabled must be a boolean");
+		throw new Error(`config.${name}.enabled must be a boolean`);
 	}
 }
 
@@ -180,7 +180,8 @@ function validateConfig(config: Record<string, unknown>): void {
 	validateModelExclusionsConfig(config.modelExclusions);
 	validateModelResponseAliases(config.modelResponseAliases);
 	validateMainWindowRendererConfig(config.mainWindowRenderer);
-	validateOrcaProgressTabsConfig(config.orcaProgressTabs);
+	validateProgressTabsConfig("orcaProgressTabs", config.orcaProgressTabs);
+	validateProgressTabsConfig("herdrProgressTabs", config.herdrProgressTabs);
 }
 
 export function getConfigPath(): string {

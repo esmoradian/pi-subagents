@@ -27,6 +27,9 @@ export interface HerdrInspectorBinding {
 	missionId?: string;
 	missionPath?: string;
 	paneId: string;
+	/** Set when the inspector owns a whole tab: inspector pane on top, shell pane below. */
+	tabId?: string;
+	shellPaneId?: string;
 	openedAt: string;
 	lastFocusedAt?: string;
 	herdrVersion?: string;
@@ -39,7 +42,11 @@ interface InspectorParams {
 	dir?: string;
 	index?: number;
 	focus?: boolean;
+	layout?: HerdrInspectorLayout;
 }
+
+/** `split` splits the caller's pane; `tab` opens a dedicated tab with a shell pane under the inspector. */
+export type HerdrInspectorLayout = "split" | "tab";
 
 interface InspectorDeps {
 	state?: SubagentState;
@@ -53,6 +60,7 @@ interface InspectorDeps {
 	signal?: AbortSignal;
 	now?: () => Date;
 	runnerPath?: string;
+	env?: Record<string, string | undefined>;
 }
 
 function result(text: string, isError = false): AgentToolResult<Details> {
@@ -73,6 +81,7 @@ function parseBinding(value: unknown): HerdrInspectorBinding | undefined {
 	if (input.schemaVersion !== 1 || input.kind !== "herdr-inspector") return undefined;
 	if (typeof input.runId !== "string" || typeof input.asyncDir !== "string" || typeof input.paneId !== "string" || typeof input.openedAt !== "string" || typeof input.command !== "string") return undefined;
 	if (input.childIndex !== undefined && (!Number.isInteger(input.childIndex) || input.childIndex < 0)) return undefined;
+	if ((input.tabId !== undefined && typeof input.tabId !== "string") || (input.shellPaneId !== undefined && typeof input.shellPaneId !== "string")) return undefined;
 	return input as HerdrInspectorBinding;
 }
 
@@ -86,6 +95,24 @@ function extractPaneId(value: unknown): string | undefined {
 	const pane = record.pane && typeof record.pane === "object" && !Array.isArray(record.pane) ? record.pane as Record<string, unknown> : record;
 	for (const key of ["pane_id", "paneId", "id"]) if (typeof pane[key] === "string") return pane[key];
 	return undefined;
+}
+
+function extractCreatedTab(value: unknown): { tabId: string; rootPaneId: string } | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const record = value as Record<string, unknown>;
+	const tab = record.tab && typeof record.tab === "object" && !Array.isArray(record.tab) ? record.tab as Record<string, unknown> : undefined;
+	const rootPaneId = extractPaneId(record.root_pane);
+	return typeof tab?.tab_id === "string" && rootPaneId ? { tabId: tab.tab_id, rootPaneId } : undefined;
+}
+
+function tabLabel(runId: string, status: { steps?: Array<{ agent: string }> }): string {
+	const agents = [...new Set(status.steps?.map((step) => step.agent) ?? [])];
+	const who = agents.length === 0 ? "subagent" : agents.length > 2 ? `${agents.slice(0, 2).join("+")}+${agents.length - 2}` : agents.join("+");
+	return `${who} ${runId.slice(0, 8)}`;
+}
+
+function isGone(code: HerdrErrorCode): boolean {
+	return code === "NOT_FOUND" || code === "PANE_GONE";
 }
 
 function inspectorCommand(input: { runnerPath: string; asyncDir: string; runId: string; index?: number; missionPath?: string; allowSteer: boolean; allowStop: boolean; sessionRoots: string[] }): string {
@@ -181,10 +208,12 @@ export async function handleHerdrInspectorAction(action: HerdrInspectorAction, p
 
 	if (action === "inspector.close") {
 		if (!existing) return result(`No Herdr inspector binding exists for async run ${target.runId}.`);
-		const closed = await client.run(["pane", "close", existing.paneId], { timeoutMs: 10_000, signal: deps.signal });
-		if (closed.ok === false && closed.error.code !== "NOT_FOUND" && closed.error.code !== "PANE_GONE") return result(formatHerdrError(closed.error), true);
+		const closed = existing.tabId
+			? await client.run(["tab", "close", existing.tabId], { timeoutMs: 10_000, signal: deps.signal })
+			: await client.run(["pane", "close", existing.paneId], { timeoutMs: 10_000, signal: deps.signal });
+		if (closed.ok === false && !isGone(closed.error.code)) return result(formatHerdrError(closed.error), true);
 		fs.rmSync(bindingPath(target.asyncDir, params.index), { force: true });
-		return result(`Closed Herdr inspector pane ${existing.paneId} for async run ${target.runId}. The subagent run was not stopped.`);
+		return result(`Closed Herdr inspector ${existing.tabId ? `tab ${existing.tabId}` : `pane ${existing.paneId}`} for async run ${target.runId}. The subagent run was not stopped.`);
 	}
 
 	const detected = await detectHerdr(client, deps.signal);
@@ -193,12 +222,31 @@ export async function handleHerdrInspectorAction(action: HerdrInspectorAction, p
 		const live = await paneExists(client, existing.paneId, deps.signal);
 		if (live.ok) return result(`Herdr inspector pane ${existing.paneId} is already open for async run ${target.runId}.${params.focus ? " Herdr cannot refocus an arbitrary raw pane id; select it in the Herdr UI." : ""}`);
 	}
-	const splitArgs = ["pane", "split", "--current", "--direction", "right", "--cwd", status.cwd ?? deps.cwd];
-	splitArgs.push(params.focus === true ? "--focus" : "--no-focus");
-	const split = await client.run(splitArgs, { timeoutMs: 15_000, signal: deps.signal });
-	if (split.ok === false) return result(formatHerdrError(split.error), true);
-	const paneId = extractPaneId(split.data);
-	if (!paneId) return result("Herdr inspector error (PANE_GONE): pane split returned no pane id.", true);
+	const paneCwd = status.cwd ?? deps.cwd;
+	const focusArg = params.focus === true ? "--focus" : "--no-focus";
+	let paneId: string;
+	let tab: { tabId: string; shellPaneId: string } | undefined;
+	if (params.layout === "tab") {
+		const workspaceId = (deps.env ?? process.env).HERDR_WORKSPACE_ID;
+		const created = await client.run(["tab", "create", ...(workspaceId ? ["--workspace", workspaceId] : []), "--cwd", paneCwd, "--label", tabLabel(target.runId, status), focusArg], { timeoutMs: 15_000, signal: deps.signal });
+		if (created.ok === false) return result(formatHerdrError(created.error), true);
+		const createdTab = extractCreatedTab(created.data);
+		if (!createdTab) return result("Herdr inspector error (PANE_GONE): tab create returned no tab or root pane id.", true);
+		const shell = await client.run(["pane", "split", createdTab.rootPaneId, "--direction", "down", "--cwd", paneCwd, "--no-focus"], { timeoutMs: 15_000, signal: deps.signal });
+		const shellPaneId = shell.ok ? extractPaneId(shell.data) : undefined;
+		if (!shellPaneId) {
+			await client.run(["tab", "close", createdTab.tabId], { timeoutMs: 5_000 });
+			return result(shell.ok === false ? formatHerdrError(shell.error) : "Herdr inspector error (PANE_GONE): pane split returned no pane id.", true);
+		}
+		paneId = createdTab.rootPaneId;
+		tab = { tabId: createdTab.tabId, shellPaneId };
+	} else {
+		const split = await client.run(["pane", "split", "--current", "--direction", "right", "--cwd", paneCwd, focusArg], { timeoutMs: 15_000, signal: deps.signal });
+		if (split.ok === false) return result(formatHerdrError(split.error), true);
+		const splitPaneId = extractPaneId(split.data);
+		if (!splitPaneId) return result("Herdr inspector error (PANE_GONE): pane split returned no pane id.", true);
+		paneId = splitPaneId;
+	}
 	const mission = missionForRun(target.asyncDir, deps.cwd, deps.missions, target.runId);
 	const runnerPath = deps.runnerPath ?? fileURLToPath(new URL("../../../inspector-runner.mjs", import.meta.url));
 	const command = inspectorCommand({
@@ -213,7 +261,7 @@ export async function handleHerdrInspectorAction(action: HerdrInspectorAction, p
 	});
 	const started = await client.run(["pane", "run", paneId, command], { timeoutMs: 15_000, signal: deps.signal });
 	if (started.ok === false) {
-		await client.run(["pane", "close", paneId], { timeoutMs: 5_000 });
+		await client.run(tab ? ["tab", "close", tab.tabId] : ["pane", "close", paneId], { timeoutMs: 5_000 });
 		return result(formatHerdrError(started.error), true);
 	}
 	const now = (deps.now?.() ?? new Date()).toISOString();
@@ -225,11 +273,34 @@ export async function handleHerdrInspectorAction(action: HerdrInspectorAction, p
 		...(params.index !== undefined ? { childIndex: params.index } : {}),
 		...(mission ? { missionId: mission.id, missionPath: mission.path } : {}),
 		paneId,
+		...(tab ? { tabId: tab.tabId, shellPaneId: tab.shellPaneId } : {}),
 		openedAt: now,
 		...(params.focus === true ? { lastFocusedAt: now } : {}),
 		herdrVersion: detected.data.versionText,
 		command,
 	};
 	writeAtomicJson(bindingPath(target.asyncDir, params.index), binding);
+	if (tab) return result(`Opened Herdr inspector tab ${tab.tabId} for async run ${target.runId}: inspector pane ${paneId} with shell pane ${tab.shellPaneId} below. Closing the tab does not stop the run.\nControls inside the inspector pane: steer <message>, stop, status.`);
 	return result(`Opened read-only Herdr inspector pane ${paneId} for async run ${target.runId}. Closing the pane does not stop the run.\nControls inside the pane: steer <message>, stop, status.`);
+}
+
+/**
+ * Close a run's aggregate inspector tab unless its shell pane is running a
+ * foreground command. Split inspectors are left alone. Returns true when the
+ * tab is gone and its binding removed.
+ */
+export async function closeIdleHerdrInspectorTab(asyncDir: string, client: HerdrClient = createHerdrClient(), signal?: AbortSignal): Promise<boolean> {
+	const binding = readHerdrInspectorBinding(asyncDir);
+	if (!binding?.tabId || !binding.shellPaneId) return false;
+	const info = await client.run<{ process_info?: { foreground_process_group_id?: number; shell_pid?: number } }>(["pane", "process-info", "--pane", binding.shellPaneId], { timeoutMs: 5_000, signal });
+	if (info.ok) {
+		const processInfo = info.data.process_info;
+		if (!processInfo || processInfo.foreground_process_group_id !== processInfo.shell_pid) return false;
+	} else if (!isGone(info.error.code)) {
+		return false;
+	}
+	const closed = await client.run(["tab", "close", binding.tabId], { timeoutMs: 10_000, signal });
+	if (closed.ok === false && !isGone(closed.error.code)) return false;
+	fs.rmSync(bindingPath(asyncDir), { force: true });
+	return true;
 }

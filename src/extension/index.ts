@@ -55,6 +55,8 @@ import {
 	type SupervisorRequestMessageDetails,
 } from "../intercom/supervisor-ui.ts";
 import { registerHerdrStatusBridge, type HerdrStatusRun } from "../integrations/herdr-status.ts";
+import { registerHerdrProgressTabs } from "../integrations/herdr-progress-tabs.ts";
+import { closeIdleHerdrInspectorTab, handleHerdrInspectorAction } from "../inspectors/herdr/actions.ts";
 import { hasLiveSubagentWork, registerPiWebSessionLiveness } from "../integrations/pi-web-session-liveness.ts";
 import { createRetainedNestedRouteTracker } from "../runs/background/retained-nested-route-tracker.ts";
 import { listHerdrProjectPaneRoots, restoreHerdrProjectPaneSnapshots } from "../inspectors/herdr/project-panes.ts";
@@ -847,6 +849,18 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			await pi.exec(process.env.HERDR_BIN || "herdr", [...args], { timeout: 5_000 });
 		},
 	});
+	const herdrProgressTabs = registerHerdrProgressTabs({
+		events: pi.events,
+		enabled: config.herdrProgressTabs?.enabled === true,
+		open: (run) => handleHerdrInspectorAction("inspector.open", { id: run.id, dir: run.asyncDir, layout: "tab" }, {
+			state,
+			sessionRoots: state.trustedSessionRoots,
+			cwd: state.baseCwd,
+			...(state.authorityPolicy ? { authorityPolicy: state.authorityPolicy } : {}),
+			...(state.missionStoreConfig ? { missions: state.missionStoreConfig } : {}),
+		}),
+		closeIfIdle: (run) => closeIdleHerdrInspectorTab(run.asyncDir),
+	});
 	const controlEventHandler = (payload: unknown) => {
 		handleSubagentControlNotice({
 			pi,
@@ -882,6 +896,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		pi.events.on(SUBAGENT_CONTROL_EVENT, controlEventHandler),
 		pi.events.on(SUBAGENT_STEERING_NOTICE_EVENT, steeringNoticeHandler),
 		herdrStatusBridge.dispose,
+		herdrProgressTabs.dispose,
 		rpcBridge.dispose,
 	];
 
@@ -1160,6 +1175,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			hasUI: ctx.hasUI === true,
 			runs: activeHerdrRuns(),
 		});
+		herdrProgressTabs.sessionStarted({ hasUI: ctx.hasUI === true });
 		rpcBridge.emitReady(ctx);
 		supervisorChannel.start();
 		supervisorChannel.activateTransport();

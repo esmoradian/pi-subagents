@@ -147,6 +147,25 @@ The integration is off by default and supports macOS and Linux. It is disabled o
 
 Set `enabled` to `false` (or remove the block) as a kill switch. In that state, `pi-subagents` does not invoke `orca` and creates no Orca tabs. The temporary mirror files contain child output, use private file modes where supported, and are removed shortly after the run finishes. Each mirror is capped at 1 MiB. The observer stops accepting progress when the cap or stream backpressure is reached and appends a truncation notice. The viewer removes terminal control sequences with parser state that persists across file reads. On completion, the viewer exits back to the Orca terminal's shell prompt; the tab and its terminal scrollback remain open until the user closes the tab. A successfully completed native Pi run with a recorded session ends with a safely quoted `rm -- <exact-session-path>` command; failed, stopped, timed-out, and sessionless runs do not show the removal command.
 
+## `herdrProgressTabs`
+
+```json
+{
+  "herdrProgressTabs": {
+    "enabled": true
+  }
+}
+```
+
+When Pi runs inside [Herdr](https://herdr.dev), opt in to one Herdr tab per top-level async run.
+The tab is created in the parent pane's workspace, labeled with the agent names and a short run id, and opened without stealing focus.
+Its top pane runs the same inspector as `inspector.open` (status, output, `steer`, `stop`), and its bottom pane is a plain shell in the run's cwd.
+Parallel and chain children share the run's tab.
+When the run completes, the tab closes if the shell pane is idle at its prompt; if a command is still running there, the tab stays open for you to close.
+Only the root interactive session opens tabs, and tab failures never affect the run.
+Foreground runs do not get a tab; `asyncByDefault` (on unless disabled) keeps most launches async.
+Requires Herdr 0.7.5 or newer.
+
 ## `asyncByDefault`
 
 ```json

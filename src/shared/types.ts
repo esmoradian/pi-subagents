@@ -2534,6 +2534,11 @@ export interface OrcaProgressTabsConfig {
 	enabled?: boolean;
 }
 
+export interface HerdrProgressTabsConfig {
+	/** Open one Herdr tab (inspector pane over a shell pane) per top-level async run, closed on completion when the shell is idle. Opt-in. */
+	enabled?: boolean;
+}
+
 export interface MainWindowRendererConfig {
 	/** Unit of horizontal space in main chat subagent call/result rows. Omit to preserve current spacing. Set 0 for no extra padding. */
 	horizontalSpacing?: number;
@@ -2581,6 +2586,7 @@ export interface ExtensionConfig {
 	mainWindowRenderer?: MainWindowRendererConfig;
 	/** Experimental observer: mirror each native subagent's progress into a new Orca tab. */
 	orcaProgressTabs?: OrcaProgressTabsConfig;
+	herdrProgressTabs?: HerdrProgressTabsConfig;
 	forceTopLevelAsync?: boolean;
 	waitTool?: WaitToolConfig;
 	defaultSessionDir?: string;

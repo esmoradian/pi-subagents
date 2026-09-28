@@ -460,6 +460,8 @@ The inspector is a raw dashboard pane, not the child session and not a literal a
 
 Herdr remains optional. Ordinary launches stay headless, and missing/older Herdr versions affect only Herdr-specific inspector and project-pane actions. FleetView opens the selected active async child with `H`. Use `focus` only with `inspector.open`; Herdr 0.7.5 cannot focus an arbitrary existing raw pane id.
 
+Pass `layout: "tab"` to open the inspector in a new Herdr tab instead of splitting the current pane: the inspector takes the top pane and a plain shell in the run's cwd takes the bottom pane. `inspector.close` then closes the whole tab. Set [`herdrProgressTabs`](configuration.md#herdrprogresstabs) to open such a tab for every top-level async run and close it on completion when the shell is idle.
+
 ### Project panes
 
 For substantial work in another codebase, Herdr 0.7.5+ can open a project-owned Pi pane rooted in that repository:
