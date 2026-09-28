@@ -50,8 +50,12 @@ describe("Herdr progress tabs", () => {
 				client,
 				runnerPath: path.join(root, "runner.ts"),
 				env: { HERDR_WORKSPACE_ID: "w1" },
+				sessionRoots: Array.from({ length: 20 }, (_, index) => path.join(root, "sessions", `session-root-with-a-long-name-${index}`)),
 			});
 			assert.equal(opened.isError, undefined);
+			const runCommand = calls.find((args) => args[0] === "pane" && args[1] === "run")?.[3] ?? "";
+			assert.match(runCommand, /--args-file/);
+			assert.ok(runCommand.length < 1024, `a fresh shell's tty drops typed lines past 1024 bytes; got ${runCommand.length}`);
 			assert.deepEqual(calls.find((args) => args[0] === "tab" && args[1] === "create"), ["tab", "create", "--workspace", "w1", "--cwd", root, "--label", "scout+worker run-1234", "--no-focus"]);
 			assert.deepEqual(calls.find((args) => args[0] === "pane" && args[1] === "split"), ["pane", "split", "w1:p20", "--direction", "down", "--cwd", root, "--no-focus"]);
 			assert.ok(calls.some((args) => args[0] === "pane" && args[1] === "run" && args[2] === "w1:p20"));

@@ -14,13 +14,19 @@ import { consumeSteerRequests, consumeStopRequest } from "../../src/runs/backgro
 import { PI_SUBAGENT_PI_BINARY_ENV } from "../../src/runs/shared/pi-spawn.ts";
 import type { AsyncStatus, SubagentState } from "../../src/shared/types.ts";
 
-// `pane run` commands quote the whole --session-roots value (base64, so it has
-// no spaces/quotes of its own); pull it back out and decode it the same way
-// the inspector runner does, rather than pattern-matching on the raw text.
+// `pane run` commands point the runner at an args file; read it back the same
+// way the inspector runner does, rather than pattern-matching on the raw text.
+function argsFromRunCommand(command: string): string[] {
+	const match = /--args-file' '([^']+)'/.exec(command);
+	assert.ok(match, `--args-file argument not found in command: ${command}`);
+	return JSON.parse(fs.readFileSync(match[1], "utf-8")) as string[];
+}
+
 function sessionRootsFromRunCommand(command: string): string[] {
-	const match = /--session-roots\S*\s+['"]?([A-Za-z0-9+/=]+)/.exec(command);
-	assert.ok(match, `--session-roots argument not found in command: ${command}`);
-	return decodeSessionRoots(match[1]);
+	const args = argsFromRunCommand(command);
+	const index = args.indexOf("--session-roots");
+	assert.ok(index >= 0, `--session-roots argument not found in args: ${args.join(" ")}`);
+	return decodeSessionRoots(args[index + 1]!);
 }
 
 function fakeChild(): EventEmitter & { stdout: PassThrough; stderr: PassThrough; kill(): boolean } {
@@ -129,7 +135,7 @@ describe("Herdr inspector", () => {
 			if (process.platform !== "win32") {
 				assert.ok(!/^[']/.test(runCall[3] ?? ""), `pane run command must not open with a quoted executable; Nushell parses it as a string expression: ${runCall[3]}`);
 			}
-			assert.match(runCall[3] ?? "", /--allow-steer.*true.*--allow-stop.*true/);
+			assert.match(argsFromRunCommand(runCall[3] ?? "").join(" "), /--allow-steer true --allow-stop true/);
 			assert.deepEqual(sessionRootsFromRunCommand(runCall[3] ?? ""), [sessionRoot]);
 
 			const closed = await handleHerdrInspectorAction("inspector.close", { dir: asyncDir }, { cwd: root, asyncDirRoot: root, client });

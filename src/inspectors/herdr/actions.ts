@@ -115,11 +115,19 @@ function isGone(code: HerdrErrorCode): boolean {
 	return code === "NOT_FOUND" || code === "PANE_GONE";
 }
 
+/**
+ * Writes the runner arguments to a file and returns a short command that
+ * reads them. Herdr types the command into a fresh shell, and until the shell
+ * enables line editing the tty drops input past its canonical line limit
+ * (1024 bytes on macOS), including the Enter that runs it.
+ */
 function inspectorCommand(input: { runnerPath: string; asyncDir: string; runId: string; index?: number; missionPath?: string; allowSteer: boolean; allowStop: boolean; sessionRoots: string[] }): string {
-	const args = [input.runnerPath, "--async-dir", input.asyncDir, "--run-id", input.runId, "--allow-steer", String(input.allowSteer), "--allow-stop", String(input.allowStop), "--session-roots", encodeSessionRoots(input.sessionRoots)];
+	const args = ["--async-dir", input.asyncDir, "--run-id", input.runId, "--allow-steer", String(input.allowSteer), "--allow-stop", String(input.allowStop), "--session-roots", encodeSessionRoots(input.sessionRoots)];
 	if (input.index !== undefined) args.push("--index", String(input.index));
 	if (input.missionPath) args.push("--mission-path", input.missionPath);
-	return formatShellCommand(resolveNodeExecutable(), args);
+	const argsPath = path.join(input.asyncDir, "inspectors", `herdr${input.index === undefined ? "" : `-${input.index}`}.args.json`);
+	writeAtomicJson(argsPath, args);
+	return formatShellCommand(resolveNodeExecutable(), [input.runnerPath, "--args-file", argsPath]);
 }
 
 function missionForRun(asyncDir: string, cwd: string, config: MissionStoreConfig | undefined, runId: string): { id: string; path: string } | undefined {

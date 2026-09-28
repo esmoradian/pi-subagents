@@ -48,6 +48,11 @@ export function formatInspectorDashboard(input: { status: AsyncStatus; asyncDir:
 }
 
 function parseArgs(argv: string[]): RunnerOptions {
+	if (argv.length === 2 && argv[0] === "--args-file") {
+		const loaded: unknown = JSON.parse(fs.readFileSync(argv[1]!, "utf-8"));
+		if (!Array.isArray(loaded) || !loaded.every((value) => typeof value === "string") || loaded[0] === "--args-file") throw new Error(`Invalid inspector args file '${argv[1]}'.`);
+		return parseArgs(loaded);
+	}
 	const values = new Map<string, string>();
 	for (let index = 0; index < argv.length; index += 2) {
 		const key = argv[index];
